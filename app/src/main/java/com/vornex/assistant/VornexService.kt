@@ -27,7 +27,7 @@ import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
 import java.util.Locale
 
-/** Фоновый сервис: слушает микрофон, ждёт слово «Борнекс», выполняет команду. */
+/** Фоновый сервис: слушает микрофон, ждёт слово «Боря», выполняет команду или отвечает на вопрос. */
 class VornexService : Service(), RecognitionListener {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -35,20 +35,22 @@ class VornexService : Service(), RecognitionListener {
     private var speech: SpeechService? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var voiceName: String? = null
+    private val speaking = HashSet<String>() // только из главного потока
     private var wakeLock: PowerManager.WakeLock? = null
     private var overlay: View? = null
     private var awaitingUntil = 0L
     private lateinit var router: CommandRouter
 
-    // Слово активации. Vosk может услышать его по-разному («бор некс», «верникс»).
-    // Смотри строку «Услышал:» на экране и подправь выражение, если не срабатывает.
-    private val wakeRegex = Regex("[бвг][оае]р\\s?н[еэи][кх]с?")
+    // Слово активации «Боря». Смотри строку «Услышал:» на экране, если не срабатывает.
+    private val wakeRegex = Regex("(?<![а-я])бо\\s?р[яьюи](?![а-я])")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        router = CommandRouter(applicationContext) { say(it) }
+        val brain = Brain(applicationContext, { say(it) }, { sayQueued(it) })
+        router = CommandRouter(applicationContext, { say(it) }, brain)
         startAsForeground()
 
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
@@ -60,11 +62,22 @@ class VornexService : Service(), RecognitionListener {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale("ru", "RU")
+                tts?.setPitch(0.9f)
+                tts?.setSpeechRate(1.0f)
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
-                    override fun onDone(utteranceId: String?) = resume()
+                    override fun onDone(utteranceId: String?) {
+                        finished(utteranceId)
+                    }
+
                     @Suppress("OVERRIDE_DEPRECATION")
-                    override fun onError(utteranceId: String?) = resume()
+                    override fun onError(utteranceId: String?) {
+                        finished(utteranceId)
+                    }
+
+                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                        finished(utteranceId)
+                    }
                 })
                 ttsReady = true
             }
@@ -86,14 +99,18 @@ class VornexService : Service(), RecognitionListener {
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
         val n = Notification.Builder(this, "vornex")
-            .setContentTitle("Vornex слушает")
-            .setContentText("Скажи: «Борнекс, открой тикток»")
+            .setContentTitle("Боря слушает")
+            .setContentText("Скажи: «Боря, открой тикток»")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            if (LocationHelper.hasPermission(this)) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            }
+            startForeground(1, n, type)
         } else {
             startForeground(1, n)
         }
@@ -123,11 +140,13 @@ class VornexService : Service(), RecognitionListener {
             val rec = Recognizer(model, 16000f)
             speech = SpeechService(rec, 16000f)
             speech?.startListening(this)
-            VornexState.status = "Слушаю. Скажи: «Борнекс, …»"
+            VornexState.status = "Слушаю. Скажи: «Боря, …»"
             say(router.hello())
         } catch (e: Exception) {
             VornexState.status = "Ошибка модели: ${e.message}"
         }
+        // нейросеть грузится дольше всего, поэтому отдельно и после запуска слуха
+        LlmEngine.load(applicationContext)
     }
 
     // ---- Распознавание ----
@@ -153,7 +172,7 @@ class VornexService : Service(), RecognitionListener {
         val m = wakeRegex.find(text)
         when {
             m != null -> {
-                val rest = text.substring(m.range.last + 1).trim()
+                val rest = text.substring(m.range.last + 1).trim().trimStart(',', ' ')
                 if (rest.isEmpty()) {
                     awaitingUntil = now + 8000 // сказал только имя: ждём команду 8 секунд
                     say(router.listening())
@@ -165,21 +184,50 @@ class VornexService : Service(), RecognitionListener {
                 awaitingUntil = 0
                 router.handle(text)
             }
+            // Без слова «Боря» ничего не обрабатывается и нигде не сохраняется.
         }
     }
 
     // ---- Озвучка (на время речи микрофон на паузе, чтобы не слышать самого себя) ----
 
-    private fun say(t: String) {
+    private fun say(t: String) = speak(t, true)
+    private fun sayQueued(t: String) = speak(t, false)
+
+    private fun speak(t: String, flush: Boolean) {
+        val text = t.trim()
+        if (text.isEmpty()) return
         handler.post {
             if (!ttsReady) return@post
+            applyVoice()
             speech?.setPause(true)
-            tts?.speak(t, TextToSpeech.QUEUE_FLUSH, null, "vornex")
+            val id = "v" + System.nanoTime()
+            speaking.add(id)
+            val r = tts?.speak(
+                text,
+                if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
+                null,
+                id
+            )
+            if (r != TextToSpeech.SUCCESS) finished(id)
         }
     }
 
-    private fun resume() {
-        handler.post { speech?.setPause(false) }
+    private fun finished(id: String?) {
+        handler.post {
+            speaking.remove(id)
+            if (speaking.isEmpty()) speech?.setPause(false)
+        }
+    }
+
+    // Голос выбирается в приложении кнопкой «Сменить голос».
+    private fun applyVoice() {
+        val want = getSharedPreferences("vornex", MODE_PRIVATE).getString("voice", null)
+        if (want == voiceName) return
+        val v = tts?.voices?.firstOrNull { it.name == want }
+        if (v != null) {
+            tts?.voice = v
+            voiceName = want
+        }
     }
 
     override fun onDestroy() {
@@ -187,6 +235,9 @@ class VornexService : Service(), RecognitionListener {
         speech?.shutdown()
         model?.close()
         tts?.shutdown()
+        WikiDb.close()
+        PlacesDb.close()
+        LlmEngine.unload()
         overlay?.let {
             try {
                 (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it)

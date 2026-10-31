@@ -15,26 +15,30 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-/** Разбирает фразу после слова «Борнекс», выполняет команду и отвечает с характером. */
-class CommandRouter(private val ctx: Context, private val say: (String) -> Unit) {
+/** Разбирает фразу после слова «Боря», выполняет команду или передаёт вопрос мозгу. */
+class CommandRouter(
+    private val ctx: Context,
+    private val say: (String) -> Unit,
+    private val brain: Brain
+) {
 
     private val ru = Locale("ru")
     private var torchOn = false
 
-    // ---------- Характер Vornex. Меняй и добавляй свои фразы ----------
+    // ---------- Характер Боря. Меняй и добавляй свои фразы ----------
 
     private fun ack() = listOf(
-        "Хорошо, хозяин", "Слушаюсь, хозяин", "Как скажете, хозяин", "Будет сделано, хозяин",
-        "Уже делаю", "Есть!", "Без проблем", "Сделаю в лучшем виде"
+        "Есть, сэр", "Так точно, сэр", "Слушаюсь, сэр", "Хорошо, хозяин", "Будет сделано, хозяин",
+        "Сию секунду, сэр", "Уже делаю, сэр", "Как прикажете, сэр"
     ).random()
 
     fun hello() = listOf(
-        "Vornex на связи, хозяин",
+        "Боря на связи, сэр",
         "Я проснулся, хозяин. Чем займёмся?",
-        "Всё готово, хозяин. Я весь внимание"
+        "К вашим услугам, сэр. Я весь внимание"
     ).random()
 
-    fun listening() = listOf("Слушаю, хозяин", "Да, хозяин?", "Я весь внимание", "На связи").random()
+    fun listening() = listOf("Слушаю, сэр", "Да, хозяин?", "К вашим услугам", "Я весь внимание, сэр").random()
 
     private val jokes = listOf(
         "Почему программисты путают Хэллоуин и Рождество? Потому что тридцать первое октября равно двадцать пятому декабря.",
@@ -76,10 +80,12 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
         val t = raw.lowercase(ru).replace('ё', 'е').trim()
         val open = Regex("^(открой|открыть|запусти|запустить)\\s+(.+)$").find(t)
         val call = Regex("^(позвони|набери|вызови)\\s+(.+)$").find(t)
+        val web = Regex("^(найди|загугли|поищи)\\s+(?:в интернете\\s+|в гугле\\s+|в google\\s+)?(.+)$").find(t)
         when {
             t.isEmpty() -> say(listening())
             open != null -> openApp(open.groupValues[2])
             call != null -> callContact(call.groupValues[2])
+            web != null -> webSearch(web.groupValues[2])
 
             Regex("закро[а-я]*\\s+вс[её]").containsMatchIn(t) -> closeAll(t.contains("вкладк"))
             t == "домой" || t.contains("главный экран") -> withA11y { it.home(); say(ack()) }
@@ -88,7 +94,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
             t.contains("скриншот") || t.contains("снимок экрана") -> withA11y { say(ack()); it.screenshot() }
 
             t.contains("фонар") -> torch(t)
-            t.contains("сколько времени") || t.contains("который час") || t.contains("время") -> sayTime()
+            t.contains("сколько времени") || t.contains("который час") || t == "время" -> sayTime()
             t.contains("какое число") || t.contains("какая дата") || t.contains("какой сегодня день") -> sayDate()
             t.contains("громче") -> volume(AudioManager.ADJUST_RAISE)
             t.contains("тише") -> volume(AudioManager.ADJUST_LOWER)
@@ -96,17 +102,17 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
             t.contains("анекдот") || t.contains("шутк") -> say(jokes.random())
             t.contains("как дела") -> say(
                 listOf(
-                    "Дела идут как по маслу, хозяин. Заряд бодрости сто процентов",
+                    "Дела идут как по маслу, сэр. Заряд бодрости сто процентов",
                     "Отлично, хозяин. Жду приказов и никуда не тороплюсь",
-                    "Работаю без выходных и без жалоб, хозяин"
+                    "Работаю без выходных и без жалоб, сэр"
                 ).random()
             )
-            t.contains("спасибо") -> say(listOf("Всегда пожалуйста, хозяин", "Обращайтесь", "Рад стараться").random())
-            t.startsWith("привет") -> say(listOf("Приветствую, хозяин!", "Доброго времени суток, хозяин", "О, хозяин! Рад слышать").random())
+            t.contains("спасибо") -> say(listOf("Всегда пожалуйста, сэр", "Обращайтесь, хозяин", "Рад стараться").random())
+            t.startsWith("привет") -> say(listOf("Приветствую, сэр!", "Доброго времени суток, хозяин", "О, хозяин! Рад слышать").random())
             t.contains("кто ты") || t.contains("как тебя зовут") ->
-                say("Я Vornex, ваш личный помощник. Не для продажи, только для хозяина")
+                say("Я Боря, ваш личный помощник. Не для продажи, только для хозяина")
 
-            else -> webSearch(t) // Этап 2: здесь будет локальная нейросеть
+            else -> brain.answer(t) // вопросы: Википедия, местоположение, нейросеть
         }
     }
 
@@ -115,7 +121,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             ctx.startActivity(i)
         } catch (e: Exception) {
-            say("Не получилось, хозяин")
+            say("Не получилось, сэр")
         }
     }
 
@@ -124,7 +130,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
     private fun withA11y(block: (VornexAccessibility) -> Unit) {
         val s = VornexAccessibility.instance
         if (s == null) {
-            say("Мне нужны специальные возможности, хозяин. Включи их в приложении, кнопка номер три")
+            say("Мне нужны специальные возможности, сэр. Включите их в приложении, кнопка номер три")
             return
         }
         block(s)
@@ -132,10 +138,10 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
 
     private fun closeAll(tabs: Boolean) = withA11y { s ->
         say(
-            if (tabs) "Вкладки внутри Хрома мне не подчиняются, хозяин. Зато закрою все приложения"
+            if (tabs) "Вкладки внутри Хрома мне не подчиняются, сэр. Зато закрою все приложения"
             else ack() + ". Зачищаю всё"
         )
-        s.closeAll { ok -> if (!ok) say("Кнопку не нашёл, хозяин. Просто ушёл на главный экран") }
+        s.closeAll { ok -> if (!ok) say("Кнопку не нашёл, сэр. Просто ушёл на главный экран") }
     }
 
     // ---------- Приложения, звонки, фонарик ----------
@@ -157,7 +163,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
 
         val intent = hit?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
         if (intent == null) {
-            say("Не нашёл приложение $name, хозяин. Может, оно просто скромное и прячется?")
+            say("Не нашёл приложение $name, сэр. Может, оно просто скромное и прячется?")
             return
         }
         say(ack() + ". Открываю $name")
@@ -166,7 +172,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
 
     private fun callContact(nameRaw: String) {
         if (ctx.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-            say("Нет доступа к контактам, хозяин")
+            say("Нет доступа к контактам, сэр")
             return
         }
         val q = nameRaw.trim()
@@ -189,7 +195,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
                 }
             }
         }
-        say("Не нашёл контакт $q, хозяин")
+        say("Не нашёл контакт $q, сэр")
     }
 
     private fun torch(t: String) {
@@ -199,7 +205,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
                 cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             }
             if (id == null) {
-                say("Вспышки нет, хозяин")
+                say("Вспышки нет, сэр")
                 return
             }
             torchOn = when {
@@ -208,7 +214,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
                 else -> !torchOn
             }
             cm.setTorchMode(id, torchOn)
-            say(if (torchOn) "Да будет свет, хозяин" else "Свет погашен")
+            say(if (torchOn) "Да будет свет, сэр" else "Свет погашен")
         } catch (e: Exception) {
             say("Фонарик недоступен")
         }
@@ -218,7 +224,7 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
 
     private fun sayTime() {
         val c = Calendar.getInstance()
-        val tail = listOf("", "", " Время летит, хозяин", " Самое время что-нибудь сделать")
+        val tail = listOf("", "", " Время летит, сэр", " Самое время что-нибудь сделать")
         say("Сейчас %d:%02d.".format(c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE)) + tail.random())
     }
 
@@ -231,15 +237,8 @@ class CommandRouter(private val ctx: Context, private val say: (String) -> Unit)
         am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, AudioManager.FLAG_SHOW_UI)
     }
 
-    private fun webSearch(q: String) {
-        val query = q.removePrefix("найди ").removePrefix("поищи ").trim()
-        say(
-            listOf(
-                "Сам не знаю, хозяин. Спрошу у интернета: $query",
-                "Хм. Загуглю: $query",
-                "Это выше моих знаний пока что. Ищу: $query"
-            ).random()
-        )
+    private fun webSearch(query: String) {
+        say(ack() + ". Ищу в интернете: $query")
         start(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(query))))
     }
 }
