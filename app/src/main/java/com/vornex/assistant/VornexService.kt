@@ -219,6 +219,7 @@ class VornexService : Service() {
         speaker?.shutdown()
         model?.close()
         WikiDb.close()
+        PoiDb.close()
         PlacesDb.close()
         LlmEngine.unload()
         NeuralVoice.unload()

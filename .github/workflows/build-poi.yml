@@ -1,0 +1,34 @@
+name: Build POI
+
+# Магазины, аптеки, банкоматы, остановки Казахстана из OpenStreetMap -> релиз "poi"
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  poi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install osmium
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq osmium-tool
+      - name: Download Kazakhstan extract
+        run: |
+          curl -fL --retry 5 -o kz.osm.pbf https://download.geofabrik.de/asia/kazakhstan-latest.osm.pbf
+          ls -la kz.osm.pbf
+      - name: Filter and export
+        run: |
+          osmium tags-filter kz.osm.pbf nwr/shop nwr/amenity nwr/tourism nwr/highway=bus_stop nwr/railway=station -o f.osm.pbf
+          osmium export f.osm.pbf -f geojsonseq --geometry-types=point,polygon -o export.geojsonseq --overwrite
+          ls -la export.geojsonseq
+      - name: Build pois.db
+        run: python3 tools/build_pois_db.py export.geojsonseq pois.db && ls -la pois.db
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: poi
+          name: Vornex POI
+          files: pois.db

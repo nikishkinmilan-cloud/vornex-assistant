@@ -41,6 +41,7 @@ class MainActivity : Activity() {
             infoView.text =
                 "Википедия: ${if (WikiDb.available(this@MainActivity)) "есть" else "нет"}\n" +
                     "Места: ${if (PlacesDb.available(this@MainActivity)) "есть" else "нет"}\n" +
+                    "Карта магазинов: ${if (PoiDb.available(this@MainActivity)) "есть" else "нет"}\n" +
                     "Нейросеть: ${if (LlmEngine.isInstalled(this@MainActivity)) LlmEngine.status else "нет файла"}\n" +
                     "Ваш голос: ${
                         when {
@@ -275,6 +276,8 @@ class MainActivity : Activity() {
 
     private val dataBase = "https://github.com/nikishkinmilan-cloud/vornex-assistant/releases/download/data/"
 
+    private val poiBase = "https://github.com/nikishkinmilan-cloud/vornex-assistant/releases/download/poi/"
+
     private fun installAll() {
         if (busyText != null) return
         busyText = "Начинаю установку…"
@@ -290,7 +293,7 @@ class MainActivity : Activity() {
                 if (!SpkStore.isInstalled(applicationContext)) {
                     SpkStore.download(applicationContext) { busyText = "Скачиваю модель вашего голоса: $it%" }
                 }
-                for ((name, label) in listOf("wiki.db" to "Википедия", "places.db" to "места", "model.litertlm" to "нейросеть")) {
+                for ((name, label) in listOf("wiki.db" to "Википедия", "places.db" to "места", "model.litertlm" to "нейросеть", "pois.db" to "карта магазинов")) {
                     if (File(filesDir, name).exists()) continue
                     if (!fetchData(name, label)) missing.add(label)
                 }
@@ -309,7 +312,7 @@ class MainActivity : Activity() {
     private fun fetchData(name: String, label: String): Boolean {
         val part = File(filesDir, "$name.part")
         val have = if (part.exists()) part.length() else 0L
-        val c = java.net.URL(dataBase + name).openConnection() as java.net.HttpURLConnection
+        val c = java.net.URL((if (name == "pois.db") poiBase else dataBase) + name).openConnection() as java.net.HttpURLConnection
         c.connectTimeout = 20000
         c.readTimeout = 60000
         if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
@@ -343,6 +346,7 @@ class MainActivity : Activity() {
         when (name) {
             "wiki.db" -> WikiDb.close()
             "places.db" -> PlacesDb.close()
+            "pois.db" -> PoiDb.close()
             else -> LlmEngine.unload()
         }
         val dst = File(filesDir, name)

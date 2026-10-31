@@ -6,6 +6,7 @@ on:
       - "tools/**"
       - ".github/workflows/build-data.yml"
       - ".github/workflows/build-voice.yml"
+      - ".github/workflows/build-poi.yml"
   workflow_dispatch:
 
 permissions:

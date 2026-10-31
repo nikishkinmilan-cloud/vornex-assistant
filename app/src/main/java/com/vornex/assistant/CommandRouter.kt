@@ -119,11 +119,12 @@ class CommandRouter(
             open != null -> openApp(open.groupValues[2])
             msg != null -> whatsapp(msg.first, msg.second)
             call != null -> callContact(call.groupValues[2])
-            web != null -> webSearch(web.groupValues[2])
+            web != null && !t.contains("ближайш") -> webSearch(web.groupValues[2])
 
             t == "стоп" || t.startsWith("стоп ") || t.contains("хватит") || t.contains("отстань") ||
                 t.contains("выключи будильник") || t.contains("я встал") || t.contains("проснулся") || t.contains("замолчи") -> {
                 WakeService.stop(ctx)
+                guide?.let { if (it.active) it.stop() }
                 say(listOf("Молчу, сэр", "Доброе утро, хозяин", "Как скажете, сэр").random())
             }
             (t.contains("какие") || t.contains("покажи") || t.contains("список")) && (t.contains("будильник") || t.contains("напоминани")) -> listAlarms()
@@ -185,6 +186,10 @@ class CommandRouter(
             t.contains("блютуз") || t.contains("bluetooth") -> settingsPanel("bt")
             t.contains("режим полета") || t.contains("в самолете") -> settingsPanel("air")
             t.contains("яркост") -> settingsPanel("display")
+            Regex("^(проведи|веди|отведи|доведи|покажи дорогу|найди дорогу)\\s+(?:меня\\s+|путь\\s+|дорогу\\s+)*(?:до|к|в|на)\\s+(.+)$").find(t) != null ->
+                guideTo(Regex("^(проведи|веди|отведи|доведи|покажи дорогу|найди дорогу)\\s+(?:меня\\s+|путь\\s+|дорогу\\s+)*(?:до|к|в|на)\\s+(.+)$").find(t)!!.groupValues[2])
+            Regex("^(где|найди)\\s+ближайш[а-я]*\\s+(.+)$").find(t) != null ->
+                guideTo(Regex("^(где|найди)\\s+ближайш[а-я]*\\s+(.+)$").find(t)!!.groupValues[2], onlyTell = true)
             Regex("^(проложи маршрут|построй маршрут|проложи путь|проведи путь|построй путь|как доехать|как добраться|как пройти|веди меня|отвези меня|навигация|маршрут|путь)\\s+(?:до\\s+|в\\s+|к\\s+|на\\s+)?(.+)$").find(t) != null -> {
                 val dest = Regex("^(проложи маршрут|построй маршрут|проложи путь|проведи путь|построй путь|как доехать|как добраться|как пройти|веди меня|отвези меня|навигация|маршрут|путь)\\s+(?:до\\s+|в\\s+|к\\s+|на\\s+)?(.+)$").find(t)!!.groupValues[2]
                 say(ack() + ". Строю маршрут: $dest")
@@ -219,7 +224,7 @@ class CommandRouter(
             t.contains("что ты умеешь") || t.contains("что умеешь") || t == "помощь" || t.contains("твои команды") -> say(
                 "Я умею: открывать приложения, звонить, писать в ватсап, включать музыку в ютубе и ВК, " +
                     "ставить будильники и напоминания, при которых я сам вас бужу голосом, заметки, " +
-                    "запоминать факты о вас, считать, показывать заряд батареи, строить маршруты, " +
+                    "запоминать факты о вас, считать, показывать заряд батареи, строить маршруты, вести вас пешком до ближайшего магазина без интернета, " +
                     "закрывать приложения, делать скриншоты, листать экран и нажимать кнопки по названию. " +
                     "А если подключены знания, отвечаю на вопросы и говорю, где вы находитесь"
             )
@@ -390,6 +395,44 @@ class CommandRouter(
             return
         }
         say("Я помню: " + facts.takeLast(8).joinToString(". "))
+    }
+
+    // ---------- Проводник без интернета ----------
+
+    private var guide: Guide? = null
+
+    private fun guideTo(what: String, onlyTell: Boolean = false) {
+        if (!LocationHelper.hasPermission(ctx)) {
+            say("Нет доступа к геолокации, сэр")
+            return
+        }
+        if (!PoiDb.available(ctx)) {
+            say("Офлайн-карты магазинов нет, сэр. Нажмите в приложении «Установить всё». А пока открою карты")
+            start(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:mode=w&q=" + Uri.encode(what))))
+            return
+        }
+        say("Ищу, сэр. Сначала определю, где вы")
+        Thread {
+            val loc = LocationHelper.fresh(ctx)
+            if (loc == null) {
+                say("Не поймал спутники, сэр. Выйдите на открытое место")
+                return@Thread
+            }
+            val p = PoiDb.find(ctx, what, loc.latitude, loc.longitude)
+            if (p == null) {
+                say("Рядом ничего похожего не нашёл, сэр")
+                return@Thread
+            }
+            val dist = p.distM
+            val far = if (dist >= 1000) "%.1f километра".format(Locale("ru"), dist / 1000) else "${(dist / 10).toInt() * 10} метров"
+            if (onlyTell) {
+                say("Ближайший: ${p.name}, примерно $far ${Geo.direction(Geo.bearing(loc.latitude, loc.longitude, p.lat, p.lon))}")
+                return@Thread
+            }
+            say("Нашёл: ${p.name}, это $far. Веду, сэр")
+            val g = guide ?: Guide(ctx) { say(it) }.also { guide = it }
+            g.start(p)
+        }.start()
     }
 
     // ---------- Музыка ----------
