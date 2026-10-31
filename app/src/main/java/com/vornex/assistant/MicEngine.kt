@@ -16,7 +16,8 @@ import kotlin.math.abs
  */
 class MicEngine(
     private val model: Model,
-    private val onText: (String) -> Unit,
+    private val spk: org.vosk.SpeakerModel?,
+    private val onText: (String, FloatArray?) -> Unit,
     private val onError: (String) -> Unit
 ) {
     @Volatile private var running = false
@@ -63,7 +64,7 @@ class MicEngine(
         try { if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(id)?.enabled = true } catch (_: Throwable) {}
         // системный AGC не включаем: свой работает мягче и сильнее
 
-        val recognizer = Recognizer(model, rate.toFloat())
+        val recognizer = if (spk != null) Recognizer(model, rate.toFloat(), spk) else Recognizer(model, rate.toFloat())
         val buf = ShortArray(chunk)
         var smooth = 300f
         try {
@@ -87,12 +88,15 @@ class MicEngine(
                     buf[i] = v.coerceIn(-32768, 32767).toShort()
                 }
                 if (recognizer.acceptWaveForm(buf, n)) {
-                    val text = org.json.JSONObject(recognizer.result).optString("text")
-                    if (text.isNotBlank()) onText(text)
+                    val j = org.json.JSONObject(recognizer.result)
+                    val text = j.optString("text")
+                    val arr = j.optJSONArray("spk")
+                    val vec = if (arr != null) FloatArray(arr.length()) { arr.getDouble(it).toFloat() } else null
+                    if (text.isNotBlank()) onText(text, vec)
                 }
             }
             val last = org.json.JSONObject(recognizer.finalResult).optString("text")
-            if (last.isNotBlank()) onText(last)
+            if (last.isNotBlank()) onText(last, null)
         } catch (e: Exception) {
             onError("Ошибка микрофона: ${e.message}")
         } finally {

@@ -42,7 +42,15 @@ class MainActivity : Activity() {
                 "Википедия: ${if (WikiDb.available(this@MainActivity)) "есть" else "нет"}\n" +
                     "Места: ${if (PlacesDb.available(this@MainActivity)) "есть" else "нет"}\n" +
                     "Нейросеть: ${if (LlmEngine.isInstalled(this@MainActivity)) LlmEngine.status else "нет файла"}\n" +
-                    "Голос: ${
+                    "Ваш голос: ${
+                        when {
+                            VoicePrint.enrolling -> "запись ${VoicePrint.collected}/${VoicePrint.NEED}, говорите фразы"
+                            !VoicePrint.hasProfile(this@MainActivity) -> "не записан"
+                            VoicePrint.active(this@MainActivity) -> "запомнен, проверка включена"
+                            else -> "запомнен, проверка выключена"
+                        }
+                    }\n" +
+                    "Голос Бори: ${
                         when {
                             !NeuralVoice.isInstalled(this@MainActivity) -> "системный (нейро не скачан)"
                             !NeuralVoice.enabled(this@MainActivity) -> "системный (нейро выключен)"
@@ -92,6 +100,16 @@ class MainActivity : Activity() {
         root.addView(heardView)
         root.addView(infoView)
         root.addView(toggleBtn)
+        root.addView(btn("★ Установить всё (голос, знания, нейросеть)") { installAll() })
+        root.addView(btn("Запомнить мой голос") { enrollVoice() })
+        root.addView(btn("Проверка голоса: вкл / выкл") {
+            if (!VoicePrint.hasProfile(this)) {
+                VornexState.status = "Сначала нажмите «Запомнить мой голос»"
+            } else {
+                VoicePrint.setActive(this, !VoicePrint.active(this))
+                VornexState.status = if (VoicePrint.active(this)) "Отвечаю только вам" else "Отвечаю всем"
+            }
+        })
         root.addView(btn("1. Разрешить поверх других окон") {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         })
@@ -251,6 +269,99 @@ class MainActivity : Activity() {
                 VornexState.status = "Ошибка копирования: ${e.message}"
             }
         }.start()
+    }
+
+    // ---------- Установить всё ----------
+
+    private val dataBase = "https://github.com/nikishkinmilan-cloud/vornex-assistant/releases/download/data/"
+
+    private fun installAll() {
+        if (busyText != null) return
+        busyText = "Начинаю установку…"
+        Thread {
+            val missing = ArrayList<String>()
+            try {
+                if (!ModelStore.isReady(applicationContext)) {
+                    ModelStore.download(applicationContext) { busyText = "Скачиваю модель речи: $it%" }
+                }
+                if (!NeuralVoice.isInstalled(applicationContext)) {
+                    NeuralVoice.download(applicationContext) { busyText = "Скачиваю нейро-голос: $it%" }
+                }
+                if (!SpkStore.isInstalled(applicationContext)) {
+                    SpkStore.download(applicationContext) { busyText = "Скачиваю модель вашего голоса: $it%" }
+                }
+                for ((name, label) in listOf("wiki.db" to "Википедия", "places.db" to "места", "model.litertlm" to "нейросеть")) {
+                    if (File(filesDir, name).exists()) continue
+                    if (!fetchData(name, label)) missing.add(label)
+                }
+                busyText = null
+                VornexState.status =
+                    if (missing.isEmpty()) "Всё установлено. Остановите и снова запустите Vornex"
+                    else "Установлено, кроме: ${missing.joinToString()}. Они ещё собираются на GitHub, нажмите «Установить всё» позже"
+            } catch (e: Exception) {
+                busyText = null
+                VornexState.status = "Ошибка установки: ${e.message}. Нажмите «Установить всё» ещё раз, докачает"
+            }
+        }.start()
+    }
+
+    /** Качает файл из релиза data с докачкой. false — файла ещё нет (404). */
+    private fun fetchData(name: String, label: String): Boolean {
+        val part = File(filesDir, "$name.part")
+        val have = if (part.exists()) part.length() else 0L
+        val c = java.net.URL(dataBase + name).openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 20000
+        c.readTimeout = 60000
+        if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
+        val code = c.responseCode
+        if (code == 404) return false
+        if (code == 416) { // уже скачано целиком
+            part.renameTo(File(filesDir, name))
+            return true
+        }
+        if (code != 200 && code != 206) throw IllegalStateException("$label: HTTP $code")
+        val append = code == 206
+        val total = (if (append) have else 0L) + c.contentLengthLong
+        var done = if (append) have else 0L
+        var lastMb = -1L
+        c.inputStream.use { input ->
+            java.io.FileOutputStream(part, append).use { out ->
+                val buf = ByteArray(1 shl 16)
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    val mb = done shr 20
+                    if (mb != lastMb) {
+                        lastMb = mb
+                        busyText = "Скачиваю $label: $mb из ${total shr 20} МБ"
+                    }
+                }
+            }
+        }
+        when (name) {
+            "wiki.db" -> WikiDb.close()
+            "places.db" -> PlacesDb.close()
+            else -> LlmEngine.unload()
+        }
+        val dst = File(filesDir, name)
+        dst.delete()
+        if (!part.renameTo(dst)) throw IllegalStateException("не удалось сохранить $label")
+        return true
+    }
+
+    private fun enrollVoice() {
+        if (!SpkStore.isInstalled(this)) {
+            VornexState.status = "Сначала нажмите «Установить всё»"
+            return
+        }
+        if (!VornexState.running) {
+            VornexState.status = "Сначала запустите Vornex"
+            return
+        }
+        VoicePrint.startEnroll()
+        VornexState.status = "Говорите любые фразы по 3+ слова: нужно ${VoicePrint.NEED}"
     }
 
     // ---------- Голос ----------

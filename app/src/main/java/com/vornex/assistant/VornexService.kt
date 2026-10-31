@@ -112,7 +112,10 @@ class VornexService : Service() {
     private fun loadModelAndListen() {
         try {
             model = Model(ModelStore.modelDir(this).absolutePath)
-            mic = MicEngine(model!!, { process(it) }, { VornexState.status = it })
+            val spkModel = try {
+                SpkStore.modelDir(this)?.let { org.vosk.SpeakerModel(it.absolutePath) }
+            } catch (_: Throwable) { null }
+            mic = MicEngine(model!!, spkModel, { t, v -> process(t, v) }, { VornexState.status = it })
             mic?.start()
             VornexState.status = "Слушаю. Скажи: «Боря, …»"
             say(router.hello())
@@ -125,12 +128,33 @@ class VornexService : Service() {
 
     // ---- Распознавание ----
 
-    private fun process(text: String) {
+    private fun process(text: String, spk: FloatArray?) {
         if (text.isBlank()) return
         VornexState.lastHeard = text
 
+        // Запись голоса хозяина: берём фразы от трёх слов
+        if (VoicePrint.enrolling) {
+            if (spk != null && text.trim().split(" ").size >= 3) {
+                val done = VoicePrint.addSample(this, spk)
+                if (done) say("Запомнил ваш голос, хозяин. Теперь я слушаюсь только вас")
+                else say("Принял. Ещё ${VoicePrint.NEED - VoicePrint.collected}")
+            }
+            return
+        }
+
         val now = SystemClock.elapsedRealtime()
         val m = wakeRegex.find(text)
+        if ((m != null || now < awaitingUntil) && spk != null && VoicePrint.active(this) &&
+            text.trim().split(" ").size >= 2
+        ) {
+            val d = VoicePrint.distance(this, spk)
+            VoicePrint.lastDist = d
+            if (d > VoicePrint.THRESHOLD) {
+                VornexState.lastHeard = "$text  [чужой голос: %.2f]".format(d)
+                return
+            }
+            VornexState.lastHeard = "$text  [голос %.2f]".format(d)
+        }
         when {
             m != null -> {
                 val rest = text.substring(m.range.last + 1).trim().trimStart(',', ' ')

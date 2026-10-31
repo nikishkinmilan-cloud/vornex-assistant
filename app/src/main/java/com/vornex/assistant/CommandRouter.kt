@@ -185,23 +185,22 @@ class CommandRouter(
             t.contains("блютуз") || t.contains("bluetooth") -> settingsPanel("bt")
             t.contains("режим полета") || t.contains("в самолете") -> settingsPanel("air")
             t.contains("яркост") -> settingsPanel("display")
-            t.contains("монетк") || t.contains("орел или решка") -> say(listOf("Орёл", "Решка").random())
-            t.contains("кубик") -> say("Выпало " + (1..6).random())
-            Regex("случайное число от (\\d+) до (\\d+)").find(t) != null -> {
-                val m = Regex("случайное число от (\\d+) до (\\d+)").find(t)!!
-                val a = m.groupValues[1].toInt(); val b = m.groupValues[2].toInt()
-                say("Выпало " + (minOf(a, b)..maxOf(a, b)).random())
-            }
             Regex("^(проложи маршрут|построй маршрут|как доехать|навигация|маршрут)\\s+(?:до\\s+|в\\s+|к\\s+)?(.+)$").find(t) != null -> {
                 val dest = Regex("^(проложи маршрут|построй маршрут|как доехать|навигация|маршрут)\\s+(?:до\\s+|в\\s+|к\\s+)?(.+)$").find(t)!!.groupValues[2]
                 say(ack() + ". Строю маршрут: $dest")
                 start(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(dest))))
             }
-            Regex("^(открой|зайди на|перейди на)\\s+сайт\\s+(.+)$").find(t) != null -> {
-                val site = Regex("^(открой|зайди на|перейди на)\\s+сайт\\s+(.+)$").find(t)!!.groupValues[2]
-                    .replace(" точка ", ".").replace(" ", "")
-                say(ack() + ". Открываю $site")
-                start(Intent(Intent.ACTION_VIEW, Uri.parse(if (site.startsWith("http")) site else "https://$site")))
+            Regex("^(открой|зайди на|перейди на)\\s+(?:сайт|страницу)\\s+(.+)$").find(t) != null -> {
+                val site = Regex("^(открой|зайди на|перейди на)\\s+(?:сайт|страницу)\\s+(.+)$").find(t)!!.groupValues[2]
+                    .replace(" точка ", ".")
+                say(ack() + ". Открываю сайт $site")
+                val url = if (site.contains(".") && !site.contains(" ")) {
+                    if (site.startsWith("http")) site else "https://$site"
+                } else {
+                    // «мне повезёт»: DuckDuckGo сразу переходит на первый найденный сайт
+                    "https://duckduckgo.com/?q=" + Uri.encode("\\" + site + " сайт")
+                }
+                start(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             }
             t.contains("сфотографируй") || t.contains("сделай фото") || t.contains("сделай селфи") -> {
                 say(ack())
@@ -229,6 +228,17 @@ class CommandRouter(
             t.contains("громче") -> volume(AudioManager.ADJUST_RAISE)
             t.contains("тише") -> volume(AudioManager.ADJUST_LOWER)
 
+            t.contains("запомни мой голос") || t.contains("запомни голос") -> startEnroll()
+            t.contains("забудь мой голос") || t.contains("отключи проверку голоса") || t.contains("выключи проверку голоса") -> {
+                VoicePrint.setActive(ctx, false)
+                say("Хорошо, сэр. Теперь я слушаюсь всех")
+            }
+            t.contains("включи проверку голоса") -> {
+                if (VoicePrint.hasProfile(ctx)) {
+                    VoicePrint.setActive(ctx, true)
+                    say("Есть, сэр. Теперь отвечаю только вам")
+                } else say("Сначала скажите: Боря, запомни мой голос")
+            }
             t.contains("анекдот") || t.contains("шутк") -> say(jokes.random())
             t.contains("как дела") -> say(
                 listOf(
@@ -593,6 +603,15 @@ class CommandRouter(
         }
         // На экране результатов тапаем по первому видео
         VornexAccessibility.instance?.tapFraction(0.5f, 0.30f, 6500)
+    }
+
+    private fun startEnroll() {
+        if (!SpkStore.isInstalled(ctx)) {
+            say("Нужна модель голоса, сэр. Нажмите в приложении кнопку: Установить всё")
+            return
+        }
+        VoicePrint.startEnroll()
+        say("Хорошо, хозяин. Говорите любые фразы, не короче трёх слов. Мне нужно ${VoicePrint.NEED} штук")
     }
 
     private fun battery() {
