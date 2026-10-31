@@ -9,6 +9,9 @@ on:
       zim_kind:
         description: "Какой ZIM Википедии брать: mini (лёгкий) или nopic (большой, долго)"
         default: mini
+      limit:
+        description: "Сколько статей взять (0 = все). Для быстрой сборки: 500000"
+        default: "0"
 
 permissions:
   contents: write
@@ -48,7 +51,9 @@ jobs:
           echo "::notice::ZIM: $name ($(du -h wiki.zim | cut -f1))"
 
       - name: Build wiki.db
-        run: python tools/build_wiki_db.py wiki.zim wiki.db
+        run: |
+          lim="${{ inputs.limit }}"
+          if [ -n "$lim" ] && [ "$lim" != "0" ]; then python tools/build_wiki_db.py wiki.zim wiki.db --limit "$lim"; else python tools/build_wiki_db.py wiki.zim wiki.db; fi
 
       - name: Build places.db
         run: python tools/build_places_db.py places.db
