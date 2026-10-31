@@ -123,7 +123,8 @@ class MainActivity : Activity() {
         root.addView(btn("4. Википедия: выбрать wiki.db") { pick("wiki.db") })
         root.addView(btn("5. Места: выбрать places.db") { pick("places.db") })
         root.addView(btn("6. Нейросеть: выбрать файл .litertlm") { pick("model.litertlm") })
-        root.addView(btn("7. Скачать красивый голос (нейро, ~70 МБ)") { downloadVoice() })
+        root.addView(btn("7. Нейро-голос: выбрать voice.zip") { pick("voice.zip") })
+        root.addView(btn("8. Карта магазинов: выбрать pois.db") { pick("pois.db") })
         root.addView(btn("Голос: нейро / системный (переключить)") {
             NeuralVoice.setEnabled(this, !NeuralVoice.enabled(this))
             VornexState.status = "Голос переключён. Остановите и снова запустите Vornex"
@@ -255,9 +256,36 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+                if (targetName == "voice.zip") {
+                    busyText = "Распаковываю голос…"
+                    NeuralVoice.unload()
+                    val out = File(filesDir, "voice_tmp")
+                    out.deleteRecursively()
+                    out.mkdirs()
+                    val root = out.canonicalPath + File.separator
+                    java.util.zip.ZipInputStream(tmp.inputStream().buffered()).use { zis ->
+                        var e = zis.nextEntry
+                        while (e != null) {
+                            val f = File(out, e.name)
+                            if (!f.canonicalPath.startsWith(root)) throw SecurityException("bad zip entry")
+                            if (e.isDirectory) f.mkdirs() else {
+                                f.parentFile?.mkdirs()
+                                f.outputStream().use { zis.copyTo(it) }
+                            }
+                            e = zis.nextEntry
+                        }
+                    }
+                    tmp.delete()
+                    File(filesDir, "voice").deleteRecursively()
+                    if (!out.renameTo(File(filesDir, "voice"))) throw IllegalStateException("не удалось сохранить голос")
+                    busyText = null
+                    VornexState.status = "Голос установлен. Остановите и снова запустите Vornex"
+                    return@Thread
+                }
                 when (targetName) {
                     "wiki.db" -> WikiDb.close()
                     "places.db" -> PlacesDb.close()
+                    "pois.db" -> PoiDb.close()
                     else -> LlmEngine.unload()
                 }
                 val dst = File(filesDir, targetName)
@@ -288,7 +316,11 @@ class MainActivity : Activity() {
                     ModelStore.download(applicationContext) { busyText = "Скачиваю модель речи: $it%" }
                 }
                 if (!NeuralVoice.isInstalled(applicationContext)) {
-                    NeuralVoice.download(applicationContext) { busyText = "Скачиваю нейро-голос: $it%" }
+                    try {
+                        NeuralVoice.download(applicationContext) { busyText = "Скачиваю нейро-голос: $it%" }
+                    } catch (e: Exception) {
+                        missing.add("нейро-голос")
+                    }
                 }
                 if (!SpkStore.isInstalled(applicationContext)) {
                     SpkStore.download(applicationContext) { busyText = "Скачиваю модель вашего голоса: $it%" }
@@ -300,7 +332,7 @@ class MainActivity : Activity() {
                 busyText = null
                 VornexState.status =
                     if (missing.isEmpty()) "Всё установлено. Остановите и снова запустите Vornex"
-                    else "Установлено, кроме: ${missing.joinToString()}. Они ещё собираются на GitHub, нажмите «Установить всё» позже"
+                    else "Не скачалось: ${missing.joinToString()}. Репозиторий закрытый (404), поэтому скачайте файлы в браузере из релизов и выберите кнопками 4–8"
             } catch (e: Exception) {
                 busyText = null
                 VornexState.status = "Ошибка установки: ${e.message}. Нажмите «Установить всё» ещё раз, докачает"
