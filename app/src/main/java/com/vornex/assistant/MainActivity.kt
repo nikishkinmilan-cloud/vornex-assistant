@@ -41,7 +41,15 @@ class MainActivity : Activity() {
             infoView.text =
                 "Википедия: ${if (WikiDb.available(this@MainActivity)) "есть" else "нет"}\n" +
                     "Места: ${if (PlacesDb.available(this@MainActivity)) "есть" else "нет"}\n" +
-                    "Нейросеть: ${if (LlmEngine.isInstalled(this@MainActivity)) LlmEngine.status else "нет файла"}"
+                    "Нейросеть: ${if (LlmEngine.isInstalled(this@MainActivity)) LlmEngine.status else "нет файла"}\n" +
+                    "Голос: ${
+                        when {
+                            !NeuralVoice.isInstalled(this@MainActivity) -> "системный (нейро не скачан)"
+                            !NeuralVoice.enabled(this@MainActivity) -> "системный (нейро выключен)"
+                            NeuralVoice.error != null -> "нейро: ошибка ${NeuralVoice.error}"
+                            else -> "нейро-голос Piper"
+                        }
+                    }"
             ui.postDelayed(this, 500)
         }
     }
@@ -96,6 +104,11 @@ class MainActivity : Activity() {
         root.addView(btn("4. Википедия: выбрать wiki.db") { pick("wiki.db") })
         root.addView(btn("5. Места: выбрать places.db") { pick("places.db") })
         root.addView(btn("6. Нейросеть: выбрать файл .litertlm") { pick("model.litertlm") })
+        root.addView(btn("7. Скачать красивый голос (нейро, ~70 МБ)") { downloadVoice() })
+        root.addView(btn("Голос: нейро / системный (переключить)") {
+            NeuralVoice.setEnabled(this, !NeuralVoice.enabled(this))
+            VornexState.status = "Голос переключён. Остановите и снова запустите Vornex"
+        })
         root.addView(voiceBtn)
 
         setContentView(ScrollView(this).apply { addView(root) })
@@ -241,6 +254,21 @@ class MainActivity : Activity() {
     }
 
     // ---------- Голос ----------
+
+    private fun downloadVoice() {
+        if (busyText != null) return
+        busyText = "Скачиваю нейро-голос: 0%"
+        Thread {
+            try {
+                NeuralVoice.download(applicationContext) { busyText = "Скачиваю нейро-голос: $it%" }
+                busyText = null
+                VornexState.status = "Голос скачан. Остановите и снова запустите Vornex"
+            } catch (e: Exception) {
+                busyText = null
+                VornexState.status = "Ошибка загрузки голоса: ${e.message}"
+            }
+        }.start()
+    }
 
     private fun cycleVoice() {
         val t = tts ?: return

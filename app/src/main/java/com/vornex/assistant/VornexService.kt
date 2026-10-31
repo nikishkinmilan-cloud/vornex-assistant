@@ -15,27 +15,19 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import org.json.JSONObject
 import org.vosk.Model
-import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
-import java.util.Locale
 
 /** Фоновый сервис: слушает микрофон, ждёт слово «Боря», выполняет команду или отвечает на вопрос. */
-class VornexService : Service(), RecognitionListener {
+class VornexService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var model: Model? = null
-    private var speech: SpeechService? = null
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
-    private var voiceName: String? = null
+    private var mic: MicEngine? = null
+    private var speaker: Speaker? = null
     private val speaking = HashSet<String>() // только из главного потока
     private var wakeLock: PowerManager.WakeLock? = null
     private var overlay: View? = null
@@ -48,7 +40,7 @@ class VornexService : Service(), RecognitionListener {
     }
 
     // Слово активации «Боря». Смотри строку «Услышал:» на экране, если не срабатывает.
-    private val wakeRegex = Regex("(?<![а-я])бо\\s?р[яьюи](?![а-я])")
+    private val wakeRegex = Regex("(?<![а-я])б[оа]\\s?р[яьюие](?![а-я])")
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -64,29 +56,7 @@ class VornexService : Service(), RecognitionListener {
 
         addOverlay()
 
-        tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale("ru", "RU")
-                tts?.setPitch(0.9f)
-                tts?.setSpeechRate(1.0f)
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) {}
-                    override fun onDone(utteranceId: String?) {
-                        finished(utteranceId)
-                    }
-
-                    @Suppress("OVERRIDE_DEPRECATION")
-                    override fun onError(utteranceId: String?) {
-                        finished(utteranceId)
-                    }
-
-                    override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                        finished(utteranceId)
-                    }
-                })
-                ttsReady = true
-            }
-        }
+        speaker = Speaker(this) { id -> finished(id) }
 
         VornexState.running = true
         VornexState.status = "Загружаю модель…"
@@ -142,9 +112,8 @@ class VornexService : Service(), RecognitionListener {
     private fun loadModelAndListen() {
         try {
             model = Model(ModelStore.modelDir(this).absolutePath)
-            val rec = Recognizer(model, 16000f)
-            speech = SpeechService(rec, 16000f)
-            speech?.startListening(this)
+            mic = MicEngine(model!!, { process(it) }, { VornexState.status = it })
+            mic?.start()
             VornexState.status = "Слушаю. Скажи: «Боря, …»"
             say(router.hello())
         } catch (e: Exception) {
@@ -156,20 +125,7 @@ class VornexService : Service(), RecognitionListener {
 
     // ---- Распознавание ----
 
-    override fun onResult(hypothesis: String?) = process(hypothesis)
-    override fun onFinalResult(hypothesis: String?) = process(hypothesis)
-    override fun onPartialResult(hypothesis: String?) {}
-    override fun onTimeout() {}
-    override fun onError(exception: Exception?) {
-        VornexState.status = "Ошибка: ${exception?.message}"
-    }
-
-    private fun process(json: String?) {
-        val text = try {
-            JSONObject(json ?: return).optString("text")
-        } catch (_: Exception) {
-            return
-        }
+    private fun process(text: String) {
         if (text.isBlank()) return
         VornexState.lastHeard = text
 
@@ -202,18 +158,10 @@ class VornexService : Service(), RecognitionListener {
         val text = t.trim()
         if (text.isEmpty()) return
         handler.post {
-            if (!ttsReady) return@post
-            applyVoice()
-            speech?.setPause(true)
+            mic?.setPause(true)
             val id = "v" + System.nanoTime()
             speaking.add(id)
-            val r = tts?.speak(
-                text,
-                if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD,
-                null,
-                id
-            )
-            if (r != TextToSpeech.SUCCESS) finished(id)
+            speaker?.speak(text, flush, id)
         }
     }
 
@@ -221,7 +169,7 @@ class VornexService : Service(), RecognitionListener {
         handler.post {
             speaking.remove(id)
             if (speaking.isEmpty()) {
-                speech?.setPause(false)
+                mic?.setPause(false)
                 if (followUpPending) {
                     followUpPending = false
                     awaitingUntil = SystemClock.elapsedRealtime() + FOLLOW_UP_MS
@@ -242,25 +190,14 @@ class VornexService : Service(), RecognitionListener {
         }
     }
 
-    // Голос выбирается в приложении кнопкой «Сменить голос».
-    private fun applyVoice() {
-        val want = getSharedPreferences("vornex", MODE_PRIVATE).getString("voice", null)
-        if (want == voiceName) return
-        val v = tts?.voices?.firstOrNull { it.name == want }
-        if (v != null) {
-            tts?.voice = v
-            voiceName = want
-        }
-    }
-
     override fun onDestroy() {
-        speech?.stop()
-        speech?.shutdown()
+        mic?.stop()
+        speaker?.shutdown()
         model?.close()
-        tts?.shutdown()
         WikiDb.close()
         PlacesDb.close()
         LlmEngine.unload()
+        NeuralVoice.unload()
         overlay?.let {
             try {
                 (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it)

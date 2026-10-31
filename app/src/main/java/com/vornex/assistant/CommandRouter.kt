@@ -9,8 +9,10 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
+import android.os.BatteryManager
 import android.os.SystemClock
-import android.provider.AlarmClock
+import android.provider.MediaStore
+import android.provider.Settings
 import android.view.KeyEvent
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -63,6 +65,24 @@ class CommandRouter(
         "ютьюб" to listOf("youtube"),
         "ватсап" to listOf("whatsapp"),
         "вотсап" to listOf("whatsapp"),
+        "вацап" to listOf("whatsapp"),
+        "ватцап" to listOf("whatsapp"),
+        "вотцап" to listOf("whatsapp"),
+        "уотсап" to listOf("whatsapp"),
+        "вацапп" to listOf("whatsapp"),
+        "вк" to listOf("vkontakte", "com.vk", "vk"),
+        "вконтакте" to listOf("vkontakte", "com.vk", "vk"),
+        "вкмузыка" to listOf("musicvk", "vk music", "vk"),
+        "яндекс" to listOf("yandex"),
+        "яндексмузыка" to listOf("ru.yandex.music"),
+        "спотифай" to listOf("spotify"),
+        "вайлдберриз" to listOf("wildberries", "wb"),
+        "озон" to listOf("ozon"),
+        "диск" to listOf("drive", "диск"),
+        "файлы" to listOf("files", "файлы", "documents"),
+        "диктофон" to listOf("recorder", "диктофон"),
+        "музыка" to listOf("music", "музыка"),
+        "магазин" to listOf("play store", "vending"),
         "телеграм" to listOf("telegram"),
         "телега" to listOf("telegram"),
         "инстаграм" to listOf("instagram"),
@@ -101,6 +121,17 @@ class CommandRouter(
             call != null -> callContact(call.groupValues[2])
             web != null -> webSearch(web.groupValues[2])
 
+            t == "стоп" || t.startsWith("стоп ") || t.contains("хватит") || t.contains("отстань") ||
+                t.contains("выключи будильник") || t.contains("я встал") || t.contains("проснулся") || t.contains("замолчи") -> {
+                WakeService.stop(ctx)
+                say(listOf("Молчу, сэр", "Доброе утро, хозяин", "Как скажете, сэр").random())
+            }
+            (t.contains("какие") || t.contains("покажи") || t.contains("список")) && (t.contains("будильник") || t.contains("напоминани")) -> listAlarms()
+            (t.contains("отмени") || t.contains("удали") || t.contains("сними") || t.contains("отключи")) &&
+                (t.contains("будильник") || t.contains("напоминани") || t.contains("таймер")) -> {
+                val n = Alarms.cancelAll(ctx)
+                say(if (n == 0) "Отменять нечего, сэр" else "Отменил, сэр. Всего $n")
+            }
             t.contains("будильник") || t.startsWith("разбуди") -> alarm(t)
             t.contains("таймер") -> timer(t)
             t.startsWith("напомни") -> remind(t)
@@ -135,7 +166,7 @@ class CommandRouter(
 
             t.contains("пауза") || t.contains("на паузу") || t.contains("останови музыку") ->
                 media(KeyEvent.KEYCODE_MEDIA_PAUSE)
-            t.contains("включи музыку") || t.contains("продолжи") || t.contains("играй") ->
+            t == "включи музыку" || t == "продолжи" || t == "играй" || t == "включи" ->
                 media(KeyEvent.KEYCODE_MEDIA_PLAY)
             (t.contains("следующ") && (t.contains("трек") || t.contains("песн") || t.contains("музык") || t.contains("композиц"))) ||
                 t == "дальше" || t == "следующий" || t == "следующая" ->
@@ -144,6 +175,55 @@ class CommandRouter(
                 media(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
 
             t.contains("фонар") -> torch(t)
+
+            Regex("^(включи|поставь|запусти|сыграй|найди и включи|найди песню|найди музыку|включи песню|хочу послушать|поищи песню)\\s+.+").containsMatchIn(t) &&
+                !t.contains("вайфай") && !t.contains("блютуз") && !t.contains("экран") -> music(t)
+
+            t.contains("заряд") || t.contains("батаре") -> battery()
+            t.contains("вайфай") || t.contains("вай фай") || t.contains("wifi") || t.contains("интернет включи") ->
+                settingsPanel("wifi")
+            t.contains("блютуз") || t.contains("bluetooth") -> settingsPanel("bt")
+            t.contains("режим полета") || t.contains("в самолете") -> settingsPanel("air")
+            t.contains("яркост") -> settingsPanel("display")
+            t.contains("монетк") || t.contains("орел или решка") -> say(listOf("Орёл", "Решка").random())
+            t.contains("кубик") -> say("Выпало " + (1..6).random())
+            Regex("случайное число от (\\d+) до (\\d+)").find(t) != null -> {
+                val m = Regex("случайное число от (\\d+) до (\\d+)").find(t)!!
+                val a = m.groupValues[1].toInt(); val b = m.groupValues[2].toInt()
+                say("Выпало " + (minOf(a, b)..maxOf(a, b)).random())
+            }
+            Regex("^(проложи маршрут|построй маршрут|как доехать|навигация|маршрут)\\s+(?:до\\s+|в\\s+|к\\s+)?(.+)$").find(t) != null -> {
+                val dest = Regex("^(проложи маршрут|построй маршрут|как доехать|навигация|маршрут)\\s+(?:до\\s+|в\\s+|к\\s+)?(.+)$").find(t)!!.groupValues[2]
+                say(ack() + ". Строю маршрут: $dest")
+                start(Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(dest))))
+            }
+            Regex("^(открой|зайди на|перейди на)\\s+сайт\\s+(.+)$").find(t) != null -> {
+                val site = Regex("^(открой|зайди на|перейди на)\\s+сайт\\s+(.+)$").find(t)!!.groupValues[2]
+                    .replace(" точка ", ".").replace(" ", "")
+                say(ack() + ". Открываю $site")
+                start(Intent(Intent.ACTION_VIEW, Uri.parse(if (site.startsWith("http")) site else "https://$site")))
+            }
+            t.contains("сфотографируй") || t.contains("сделай фото") || t.contains("сделай селфи") -> {
+                say(ack())
+                start(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))
+            }
+            Regex("^(нажми|тапни|кликни)\\s+(?:на\\s+)?(.+)$").find(t) != null -> {
+                val w = Regex("^(нажми|тапни|кликни)\\s+(?:на\\s+)?(.+)$").find(t)!!.groupValues[2]
+                withA11y { a ->
+                    if (a.clickByTexts(listOf(w))) say(ack()) else say("Не вижу на экране «$w», сэр")
+                }
+            }
+            t.contains("прокрути вниз") || t.contains("листай вниз") || t == "вниз" || t.contains("пролистни вниз") ->
+                withA11y { it.scroll(true) }
+            t.contains("прокрути вверх") || t.contains("листай вверх") || t == "вверх" ->
+                withA11y { it.scroll(false) }
+            t.contains("что ты умеешь") || t.contains("что умеешь") || t == "помощь" || t.contains("твои команды") -> say(
+                "Я умею: открывать приложения, звонить, писать в ватсап, включать музыку в ютубе и ВК, " +
+                    "ставить будильники и напоминания, при которых я сам вас бужу голосом, заметки, " +
+                    "запоминать факты о вас, считать, показывать заряд батареи, строить маршруты, " +
+                    "закрывать приложения, делать скриншоты, листать экран и нажимать кнопки по названию. " +
+                    "А если подключены знания, отвечаю на вопросы и говорю, где вы находитесь"
+            )
             t.contains("сколько времени") || t.contains("который час") || t == "время" -> sayTime()
             t.contains("какое число") || t.contains("какая дата") || t.contains("какой сегодня день") -> sayDate()
             t.contains("громче") -> volume(AudioManager.ADJUST_RAISE)
@@ -203,24 +283,25 @@ class CommandRouter(
         }
     }
 
-    // ---------- Будильник, таймер, напоминания (через системные «Часы», работают без интернета) ----------
+    // ---------- Будильник, таймер, напоминания: Боря сам говорит вслух ----------
 
-    private fun setAlarm(hour: Int, minute: Int, label: String?) {
-        val i = Intent(AlarmClock.ACTION_SET_ALARM)
-            .putExtra(AlarmClock.EXTRA_HOUR, hour)
-            .putExtra(AlarmClock.EXTRA_MINUTES, minute)
-            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-        if (!label.isNullOrBlank()) i.putExtra(AlarmClock.EXTRA_MESSAGE, label)
-        start(i)
+    private fun cap(s: String) = s.replaceFirstChar { it.uppercase() }
+
+    /** Из остатка фразы достаёт, что сказать: «и скажи, что пора в школу». */
+    private fun spokenPart(rest: String): String {
+        var r = rest.trim().replace(Regex("^(утра|вечера|дня|ночи)\\s*"), "")
+        val m = Regex("(?:скажи|говори|сообщи|напомни|объяви)\\s+(?:мне\\s+)?(?:что\\s+|чтобы\\s+)?(.+)$").find(r)
+        r = m?.groupValues?.get(1) ?: r.replace(Regex("^(и|а|чтобы|что|мне)\\s+"), "")
+        return r.trim()
     }
 
-    private fun setTimer(seconds: Long, label: String?) {
-        val i = Intent(AlarmClock.ACTION_SET_TIMER)
-            .putExtra(AlarmClock.EXTRA_LENGTH, seconds.toInt())
-            .putExtra(AlarmClock.EXTRA_SKIP_UI, true)
-        if (!label.isNullOrBlank()) i.putExtra(AlarmClock.EXTRA_MESSAGE, label)
-        start(i)
+    private fun repeatOf(t: String) = when {
+        t.contains("каждый день") || t.contains("ежедневно") || t.contains("каждое утро") || t.contains("каждый вечер") -> 1
+        t.contains("по будням") || t.contains("в будни") || t.contains("рабочие дни") -> 2
+        else -> 0
     }
+
+    private fun repText(r: Int) = when (r) { 1 -> " Повторяю каждый день."; 2 -> " Повторяю по будням."; else -> "" }
 
     private fun alarm(t: String) {
         val toks = RuNumbers.tokenize(t)
@@ -229,8 +310,10 @@ class CommandRouter(
             say("На какое время поставить, сэр?")
             return
         }
-        setAlarm(c.hour, c.minute, null)
-        say(ack() + ". Будильник на %d:%02d".format(c.hour, c.minute))
+        val msg = spokenPart(RuNumbers.textFrom(toks, c.end))
+        val r = repeatOf(t)
+        Alarms.addClock(ctx, c.hour, c.minute, r, "alarm", msg)
+        say(ack() + ". Разбужу в %d:%02d.".format(c.hour, c.minute) + repText(r))
     }
 
     private fun timer(t: String) {
@@ -240,7 +323,7 @@ class CommandRouter(
             say("На сколько поставить таймер, сэр?")
             return
         }
-        setTimer(d.seconds, null)
+        Alarms.addAfter(ctx, d.seconds, "timer", "")
         say(ack() + ". Таймер на " + RuNumbers.humanDuration(d.seconds))
     }
 
@@ -254,7 +337,7 @@ class CommandRouter(
             val d = RuNumbers.parseDuration(toks, through + 1)
             if (d != null && d.seconds > 0) {
                 val label = cleanLabel(RuNumbers.textFrom(toks, d.end))
-                setTimer(d.seconds, label.ifBlank { "Напоминание" })
+                Alarms.addAfter(ctx, d.seconds, "remind", label.ifBlank { "время вышло" })
                 say(ack() + ". Напомню через " + RuNumbers.humanDuration(d.seconds))
                 return
             }
@@ -262,11 +345,20 @@ class CommandRouter(
         val c = RuNumbers.parseClockAt(toks)
         if (c != null) {
             val label = cleanLabel(RuNumbers.textFrom(toks, c.end))
-            setAlarm(c.hour, c.minute, label.ifBlank { "Напоминание" })
+            Alarms.addClock(ctx, c.hour, c.minute, repeatOf(t), "remind", label.ifBlank { "время пришло" })
             say(ack() + ". Напомню в %d:%02d".format(c.hour, c.minute))
             return
         }
         say("Когда напомнить, сэр? Скажите, например: напомни через десять минут позвонить маме")
+    }
+
+    private fun listAlarms() {
+        val l = Alarms.all(ctx).sortedBy { it.at }
+        if (l.isEmpty()) {
+            say("Будильников и напоминаний нет, сэр")
+            return
+        }
+        say("Всего ${l.size}. " + l.take(5).joinToString(". ") { Alarms.describe(it) })
     }
 
     // ---------- Заметки и память ----------
@@ -334,6 +426,15 @@ class CommandRouter(
                 val pkg = ri.activityInfo.packageName.lowercase()
                 candidates.any { label(ri).contains(it) || pkg.contains(it) }
             }
+            ?: run {
+                // на слух: сравниваем «скелеты» слов (ватсап ~ whatsapp, тикток ~ TikTok)
+                val want = skeleton(key)
+                if (want.length < 3) null
+                else apps.firstOrNull { ri ->
+                    val sk = skeleton(label(ri).replace(" ", ""))
+                    sk == want || (sk.length >= 4 && lev(sk, want) <= 1)
+                }
+            }
 
         val intent = hit?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
         if (intent == null) {
@@ -342,6 +443,32 @@ class CommandRouter(
         }
         say(ack() + ". Открываю $name")
         start(intent)
+    }
+
+    private val tr = mapOf(
+        'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e", 'ж' to "zh", 'з' to "z",
+        'и' to "i", 'й' to "i", 'к' to "k", 'л' to "l", 'м' to "m", 'н' to "n", 'о' to "o", 'п' to "p", 'р' to "r",
+        'с' to "s", 'т' to "t", 'у' to "u", 'ф' to "f", 'х' to "h", 'ц' to "ts", 'ч' to "ch", 'ш' to "sh", 'щ' to "sh",
+        'ы' to "i", 'э' to "e", 'ю' to "u", 'я' to "a"
+    )
+
+    /** Грубая фонетическая «основа»: без гласных и повторов, w=v, c=k. */
+    private fun skeleton(s: String): String {
+        val sb = StringBuilder()
+        for (ch in s.lowercase(ru)) sb.append(tr[ch] ?: if (ch.isLetterOrDigit()) ch.toString() else "")
+        var x = sb.toString().replace("w", "v").replace("ph", "f").replace("ck", "k").replace("c", "k")
+            .replace("x", "ks").replace("q", "k").replace("h", "").replace("y", "i")
+        x = x.replace(Regex("[aeiouy]"), "")
+        return x.replace(Regex("(.)\\1+"), "$1")
+    }
+
+    private fun lev(a: String, b: String): Int {
+        val d = Array(a.length + 1) { IntArray(b.length + 1) }
+        for (i in 0..a.length) d[i][0] = i
+        for (j in 0..b.length) d[0][j] = j
+        for (i in 1..a.length) for (j in 1..b.length)
+            d[i][j] = minOf(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+        return d[a.length][b.length]
     }
 
     private fun callContact(nameRaw: String) {
@@ -404,6 +531,87 @@ class CommandRouter(
             }
         }
         return false
+    }
+
+    // ---------- Музыка ----------
+
+    private fun installed(pkg: String) = try {
+        ctx.packageManager.getPackageInfo(pkg, 0); true
+    } catch (_: Exception) { false }
+
+    private fun launchPkg(vararg pkgs: String): Boolean {
+        for (p in pkgs) {
+            val i = ctx.packageManager.getLaunchIntentForPackage(p) ?: continue
+            start(i)
+            return true
+        }
+        return false
+    }
+
+    private fun music(t: String) {
+        val vk = Regex("(^|\\s)(в\\s+)?(вк|вконтакте|контакте)(\\s|$)").containsMatchIn(t)
+        val yt = t.contains("ютуб") || t.contains("youtube") || t.contains("ютьюб")
+        val ym = t.contains("яндекс музык")
+        var q = t
+            .replace(Regex("^(включи|поставь|запусти|сыграй|найди и включи|найди песню|найди музыку|включи песню|хочу послушать|поищи песню)\\s+"), "")
+            .replace(Regex("\\s+(в|во|на)\\s+(вк|вконтакте|контакте|ютубе|ютуб|ютьюбе|youtube|яндекс музыке)\\b"), "")
+            .replace(Regex("\\b(мою|мой|моё)\\s+"), "")
+            .replace(Regex("^(пожалуйста)\\s+"), "")
+            .trim()
+        val generic = q.isEmpty() || q in listOf("музыку", "музыка", "песню", "песни", "плейлист", "плейлиста", "музыку из плейлиста", "любимую музыку", "любимые песни", "треки")
+        if (vk && generic || vk && q.contains("плейлист")) {
+            say(ack() + ". Включаю ваш плейлист в ВК")
+            if (!launchPkg("com.uma.musicvk", "com.vkontakte.android", "com.vk.vkclient")) {
+                say("ВК не нашёл, сэр")
+                return
+            }
+            VornexAccessibility.instance?.clickWhenReady(
+                listOf("Перемешать", "Слушать", "Воспроизвести", "Shuffle", "Play"), 4000, 6
+            ) { ok -> if (!ok) say("ВК открыл, но кнопку воспроизведения не нашёл. Нажмите сами") }
+            return
+        }
+        if (generic) {
+            media(KeyEvent.KEYCODE_MEDIA_PLAY)
+            return
+        }
+        q = q.replace(Regex("^(песню|трек|музыку|песни)\\s+"), "").trim()
+        say(ack() + ". Ищу и включаю: $q")
+        val pkg = when {
+            ym && installed("ru.yandex.music") -> "ru.yandex.music"
+            installed("com.google.android.youtube") -> "com.google.android.youtube"
+            else -> null
+        }
+        try {
+            val i = Intent("android.media.action.MEDIA_PLAY_FROM_SEARCH")
+                .putExtra(android.app.SearchManager.QUERY, q)
+                .putExtra("android.intent.extra.focus", "vnd.android.cursor.item/*")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (pkg != null) i.setPackage(pkg)
+            ctx.startActivity(i)
+        } catch (_: Exception) {
+            start(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(q))))
+        }
+        // На экране результатов тапаем по первому видео
+        VornexAccessibility.instance?.tapFraction(0.5f, 0.30f, 6500)
+    }
+
+    private fun battery() {
+        val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val pct = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val charging = bm.isCharging
+        say("Заряд $pct " + RuNumbers.plural(pct.toLong(), "процент", "процента", "процентов") +
+            if (charging) ", телефон на зарядке" else "")
+    }
+
+    private fun settingsPanel(kind: String) {
+        val i = when (kind) {
+            "wifi" -> Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)
+            "bt" -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+            "air" -> Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS)
+            else -> Intent(Settings.ACTION_DISPLAY_SETTINGS)
+        }
+        say("Открываю нужные настройки, сэр. Сам переключатель трогать не умею")
+        start(i)
     }
 
     private fun torch(t: String) {

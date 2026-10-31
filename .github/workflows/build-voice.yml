@@ -1,0 +1,30 @@
+name: Build voice
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Piper voice
+        run: |
+          set -e
+          curl -sSL -o v.tar.bz2 https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-denis-medium.tar.bz2
+          tar -xjf v.tar.bz2
+          mkdir out
+          d=vits-piper-ru_RU-denis-medium
+          cp $d/*.onnx out/
+          cp $d/tokens.txt out/
+          cp -r $d/espeak-ng-data out/
+          (cd out && zip -qr ../voice.zip .)
+          ls -la voice.zip
+      - name: Publish voice release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: voice
+          name: Vornex voice
+          files: voice.zip
