@@ -21,6 +21,16 @@ android {
         }
     }
 
+    // Одна и та же подпись у всех сборок: новая версия ставится поверх старой, данные не теряются.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("vornex-debug.jks")
+            storePassword = "vornex123"
+            keyAlias = "vornex"
+            keyPassword = "vornex123"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
