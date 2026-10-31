@@ -40,7 +40,12 @@ class VornexService : Service(), RecognitionListener {
     private var wakeLock: PowerManager.WakeLock? = null
     private var overlay: View? = null
     private var awaitingUntil = 0L
+    private var followUpPending = false
     private lateinit var router: CommandRouter
+
+    private companion object {
+        const val FOLLOW_UP_MS = 8000L
+    }
 
     // Слово активации «Боря». Смотри строку «Услышал:» на экране, если не срабатывает.
     private val wakeRegex = Regex("(?<![а-я])бо\\s?р[яьюи](?![а-я])")
@@ -49,8 +54,8 @@ class VornexService : Service(), RecognitionListener {
 
     override fun onCreate() {
         super.onCreate()
-        val brain = Brain(applicationContext, { say(it) }, { sayQueued(it) })
-        router = CommandRouter(applicationContext, { say(it) }, brain)
+        val brain = Brain(applicationContext, { say(it) }, { sayQueued(it) }, { requestFollowUp() })
+        router = CommandRouter(applicationContext, { say(it) }, brain, { requestFollowUp() })
         startAsForeground()
 
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager)
@@ -215,7 +220,25 @@ class VornexService : Service(), RecognitionListener {
     private fun finished(id: String?) {
         handler.post {
             speaking.remove(id)
-            if (speaking.isEmpty()) speech?.setPause(false)
+            if (speaking.isEmpty()) {
+                speech?.setPause(false)
+                if (followUpPending) {
+                    followUpPending = false
+                    awaitingUntil = SystemClock.elapsedRealtime() + FOLLOW_UP_MS
+                }
+            }
+        }
+    }
+
+    // Режим диалога: после ответа 8 секунд можно говорить без слова «Боря».
+    // Окно начинается, когда Боря договорил.
+    private fun requestFollowUp() {
+        handler.post {
+            if (speaking.isEmpty()) {
+                awaitingUntil = SystemClock.elapsedRealtime() + FOLLOW_UP_MS
+            } else {
+                followUpPending = true
+            }
         }
     }
 

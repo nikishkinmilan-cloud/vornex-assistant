@@ -130,6 +130,7 @@ class MainActivity : Activity() {
         val need = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
             Manifest.permission.ACCESS_FINE_LOCATION
         )
         if (Build.VERSION.SDK_INT >= 33) need += Manifest.permission.POST_NOTIFICATIONS

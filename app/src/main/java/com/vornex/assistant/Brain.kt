@@ -16,7 +16,8 @@ import kotlin.math.roundToInt
 class Brain(
     private val ctx: Context,
     private val say: (String) -> Unit,        // сказать сразу (прерывает текущую речь)
-    private val sayQueued: (String) -> Unit   // добавить в очередь речи
+    private val sayQueued: (String) -> Unit,  // добавить в очередь речи
+    private val followUp: () -> Unit          // после ответа можно уточнить без слова «Боря»
 ) {
     private val ru = Locale("ru")
     private val busy = AtomicBoolean(false)
@@ -33,6 +34,7 @@ class Brain(
                 say("Что-то пошло не так, сэр")
             } finally {
                 busy.set(false)
+                followUp()
             }
         }.start()
     }
@@ -122,6 +124,8 @@ class Brain(
         )
         sb.append("Сейчас: $now.\n")
         placeContext()?.let { sb.append("Местоположение пользователя: $it.\n") }
+        val facts = Store.read(ctx, Store.MEMORY).takeLast(20)
+        if (facts.isNotEmpty()) sb.append("Факты о хозяине (учитывай их): ${facts.joinToString("; ")}.\n")
         if (hits.isNotEmpty()) {
             sb.append("Справка из Википедии (используй, если она относится к вопросу):\n")
             hits.take(2).forEach { sb.append("${it.title}: ${it.lead.take(500)}\n") }

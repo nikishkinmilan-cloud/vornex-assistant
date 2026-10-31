@@ -8,7 +8,7 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
-/** Нажимает системные кнопки за тебя: домой, назад, недавние, блокировка, скриншот. */
+/** Нажимает системные кнопки за тебя: домой, назад, недавние, блокировка, скриншот, «Отправить». */
 class VornexAccessibility : AccessibilityService() {
 
     companion object {
@@ -19,6 +19,8 @@ class VornexAccessibility : AccessibilityService() {
             "закрыть все", "закрыть всё", "очистить все", "очистить всё", "удалить все",
             "close all", "clear all"
         )
+
+        private val sendWords = listOf("Отправить", "Send")
     }
 
     private val h = Handler(Looper.getMainLooper())
@@ -44,15 +46,33 @@ class VornexAccessibility : AccessibilityService() {
     fun closeAll(done: (Boolean) -> Unit) {
         performGlobalAction(GLOBAL_ACTION_RECENTS)
         h.postDelayed({
-            val ok = clickCloseAll(rootInActiveWindow)
+            val ok = clickByTexts(rootInActiveWindow, closeWords)
             done(ok)
             h.postDelayed({ home() }, 700)
         }, 1000)
     }
 
-    private fun clickCloseAll(root: AccessibilityNodeInfo?): Boolean {
+    /** Ждёт открытия чата (WhatsApp и т.п.) и нажимает «Отправить». Пробует до 8 раз. */
+    fun clickSend(done: (Boolean) -> Unit) {
+        var tries = 0
+        val attempt = object : Runnable {
+            override fun run() {
+                tries++
+                if (clickByTexts(rootInActiveWindow, sendWords)) {
+                    done(true)
+                } else if (tries < 8) {
+                    h.postDelayed(this, 1000)
+                } else {
+                    done(false)
+                }
+            }
+        }
+        h.postDelayed(attempt, 2500)
+    }
+
+    private fun clickByTexts(root: AccessibilityNodeInfo?, words: List<String>): Boolean {
         if (root == null) return false
-        for (w in closeWords) {
+        for (w in words) {
             for (n in root.findAccessibilityNodeInfosByText(w)) {
                 var x: AccessibilityNodeInfo? = n
                 while (x != null && !x.isClickable) x = x.parent
